@@ -862,3 +862,128 @@ async def test_remote_media_uses_shared_proxy_without_bypassing_url_guard(monkey
     assert await channel._fetch_remote_media(public_url) == b"remote media"
     assert proxies == [network.proxy, network.proxy]
     assert [str(request.url) for request in requests] == [public_url]
+
+
+def _reset_neonize_cache(monkeypatch) -> None:
+    monkeypatch.setattr(whatsapp_module, "_NEONIZE_API", None)
+
+
+def _install_neonize_modules(monkeypatch) -> None:
+    neonize = types.ModuleType("neonize")
+    aioze = types.ModuleType("neonize.aioze")
+    client = types.ModuleType("neonize.aioze.client")
+    events = types.ModuleType("neonize.aioze.events")
+    utils = types.ModuleType("neonize.utils")
+    jid = types.ModuleType("neonize.utils.jid")
+
+    client.NewAClient = object
+    for event in ("ConnectedEv", "DisconnectedEv", "MessageEv", "PairStatusEv"):
+        setattr(events, event, f"{event}instance")
+    jid.build_jid = lambda user, server="s.whatsapp.net": (user, server)
+
+    neonize.aioze = aioze
+    aioze.client = client
+    aioze.events = events
+    neonize.utils = utils
+    utils.jid = jid
+
+    monkeypatch.setitem(sys.modules, "neonize", neonize)
+    monkeypatch.setitem(sys.modules, "neonize.aioze", aioze)
+    monkeypatch.setitem(sys.modules, "neonize.aioze.client", client)
+    monkeypatch.setitem(sys.modules, "neonize.aioze.events", events)
+    monkeypatch.setitem(sys.modules, "neonize.utils", utils)
+    monkeypatch.setitem(sys.modules, "neonize.utils.jid", jid)
+
+
+def _install_magic_module(monkeypatch, raise_on_init: Exception | None = None):
+    magic = types.ModuleType("magic")
+    if raise_on_init is not None:
+        def magic_raises(*args, **kwargs):
+            raise raise_on_init
+        magic.Magic = magic_raises
+    else:
+        magic.Magic = lambda: object()
+    magic.from_file = lambda path, mime=False: "application/octet-stream"
+    magic.from_buffer = lambda data, mime=False: "application/octet-stream"
+    monkeypatch.setitem(sys.modules, "magic", magic)
+    return magic
+
+
+def test_load_neonize_success_caches_api(monkeypatch) -> None:
+    _reset_neonize_cache(monkeypatch)
+    _install_neonize_modules(monkeypatch)
+    _install_magic_module(monkeypatch)
+
+    api = whatsapp_module._load_neonize()
+
+    assert whatsapp_module._load_neonize() is api
+    assert isinstance(api, _NeonizeAPI)
+    assert api.detect_mime("file.wav", mime=True) == "application/octet-stream"
+    assert api.detect_buffer(b"bytes", mime=True) == "application/octet-stream"
+
+
+def test_load_neonize_missing_neonize_reported_as_plugin_dependency(monkeypatch) -> None:
+    _reset_neonize_cache(monkeypatch)
+    monkeypatch.setitem(sys.modules, "neonize", None)
+
+    with pytest.raises(RuntimeError, match="Neonize not installed") as info:
+        whatsapp_module._load_neonize()
+
+    assert isinstance(info.value.__cause__, ImportError)
+    assert whatsapp_module._NEONIZE_API is None
+
+
+def test_load_neonize_missing_python_magic_reported_as_wrapper_install(monkeypatch) -> None:
+    _reset_neonize_cache(monkeypatch)
+    _install_neonize_modules(monkeypatch)
+    monkeypatch.setitem(sys.modules, "magic", None)
+
+    with pytest.raises(RuntimeError, match="python-magic not installed") as info:
+        whatsapp_module._load_neonize()
+
+    assert isinstance(info.value.__cause__, ImportError)
+    assert whatsapp_module._NEONIZE_API is None
+
+
+def test_load_neonize_unloadable_native_libmagic_reported_as_system_library(monkeypatch) -> None:
+    _reset_neonize_cache(monkeypatch)
+    _install_neonize_modules(monkeypatch)
+    _install_magic_module(
+        monkeypatch, raise_on_init=OSError("dlopen failed: libmagic not found")
+    )
+
+    with pytest.raises(RuntimeError, match=r"native libmagic library") as info:
+        whatsapp_module._load_neonize()
+
+    assert isinstance(info.value.__cause__, OSError)
+    assert whatsapp_module._NEONIZE_API is None
+
+
+def test_load_neonize_wrong_magic_module_reported_as_api_mismatch(monkeypatch) -> None:
+    _reset_neonize_cache(monkeypatch)
+    _install_neonize_modules(monkeypatch)
+    magic = types.ModuleType("magic")
+    magic.Magic = lambda: object()
+    monkeypatch.setitem(sys.modules, "magic", magic)
+
+    with pytest.raises(RuntimeError, match="does not expose the expected API") as info:
+        whatsapp_module._load_neonize()
+
+    assert isinstance(info.value.__cause__, ImportError)
+    assert whatsapp_module._NEONIZE_API is None
+
+
+def test_load_neonize_failure_does_not_poison_cache(monkeypatch) -> None:
+    _reset_neonize_cache(monkeypatch)
+    _install_neonize_modules(monkeypatch)
+    _install_magic_module(
+        monkeypatch, raise_on_init=OSError("dlopen failed: libmagic not found")
+    )
+
+    with pytest.raises(RuntimeError, match=r"native libmagic library"):
+        whatsapp_module._load_neonize()
+
+    _install_magic_module(monkeypatch)
+    api = whatsapp_module._load_neonize()
+
+    assert isinstance(api, _NeonizeAPI)

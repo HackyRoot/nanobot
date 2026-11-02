@@ -85,19 +85,49 @@ def _load_neonize() -> _NeonizeAPI:
     if _NEONIZE_API is not None:
         return _NEONIZE_API
 
+    # --- Neonize ---
     try:
-        import magic
         from neonize.aioze.client import NewAClient
         from neonize.aioze.events import ConnectedEv, DisconnectedEv, MessageEv, PairStatusEv
         from neonize.utils.jid import build_jid
+    except ImportError as exc:
+        raise RuntimeError(
+            "Neonize not installed. Run: nanobot plugins enable whatsapp"
+        ) from exc
 
+    # --- python-magic wrapper ---
+    try:
+        import magic
+    except ImportError as exc:
+        raise RuntimeError(
+            "python-magic not installed. Run: pip install python-magic"
+        ) from exc
+
+    # --- native libmagic library ---
+    try:
         detect_mime = getattr(magic, "from_file", None)
         detect_buffer = getattr(magic, "from_buffer", None)
         if not callable(detect_mime) or not callable(detect_buffer):
-            raise ImportError("python-magic does not expose from_file/from_buffer")
+            raise ImportError(
+                "Installed magic module does not expose the expected API "
+                "(from_file/from_buffer). Ensure python-magic is installed, "
+                "not an incompatible package such as file-magic."
+            )
+        # Eagerly verify the native library loads (some python-magic versions
+        # defer the dlopen until the first call).
+        cast(Any, magic).Magic()
     except ImportError as exc:
         raise RuntimeError(
-            "WhatsApp dependencies not installed. Run: nanobot plugins enable whatsapp"
+            "Installed magic module does not expose the expected API "
+            "(from_file/from_buffer). Ensure python-magic is installed, "
+            "not an incompatible package such as file-magic."
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            "python-magic is installed but the native libmagic library "
+            "could not be loaded. Install it with your system package manager "
+            "(e.g. 'brew install libmagic' on macOS, "
+            "'apt install libmagic1' on Debian/Ubuntu)."
         ) from exc
 
     _NEONIZE_API = _NeonizeAPI(

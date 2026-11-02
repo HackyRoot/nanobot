@@ -301,9 +301,29 @@ Then check:
 | Telegram receives no messages | Confirm the channel is enabled, the gateway is running, and the sender is paired or listed in `allowFrom`. |
 | Discord replies missing | Enable Message Content intent and invite the bot with the required permissions. |
 | WhatsApp or WeChat login expired | Re-run `nanobot channels login whatsapp` or `nanobot channels login weixin`. |
+| WhatsApp fails with `Neonize not installed` | The plugin is not enabled. Run `nanobot plugins enable whatsapp`. |
+| WhatsApp fails with `python-magic is installed but the native libmagic library could not be loaded` | The Python wrapper is present but the system MIME library is missing. See [WhatsApp native libmagic requirement](#whatsapp-native-libmagic-requirement). |
+| WhatsApp fails with the magic module `does not expose the expected API (from_file/from_buffer)` | A conflicting `magic` package (for example `file-magic`) shadows `python-magic`. Uninstall the conflicting package and reinstall `python-magic`. |
 | Chat app works but WebUI does not | The provider and gateway are likely fine; debug the WebSocket channel separately. |
 
 See [`chat-apps.md`](./chat-apps.md) for channel-specific setup.
+
+### WhatsApp native libmagic requirement
+
+WhatsApp media detection needs two layers, and installing one does not install the other:
+
+1. **Python wrapper**: `python-magic`, installed automatically by `nanobot plugins enable whatsapp` from the plugin manifest.
+2. **Native library**: `libmagic`, a system library the wrapper loads at runtime. `nanobot plugins enable whatsapp` cannot install it; install it with your system package manager:
+
+```bash
+# macOS (Homebrew)
+brew install libmagic
+
+# Debian/Ubuntu
+apt install libmagic1
+```
+
+On Windows the plugin installs `python-magic-bin`, which bundles the native library. If initialization still fails after enabling the plugin, compare the error you see with the wrapper (`python-magic not installed`), the native library (`native libmagic library could not be loaded`), and the API (`does not expose the expected API`) messages above; each points to a different layer.
 
 ## Tool and Workspace Problems
 
